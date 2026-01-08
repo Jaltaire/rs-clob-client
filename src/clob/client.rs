@@ -17,7 +17,7 @@ use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client as ReqwestClient, Method, Request};
 use serde_json::json;
-#[cfg(feature = "tracing")]
+#[cfg(all(feature = "tracing", feature = "heartbeats"))]
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -642,7 +642,7 @@ impl<S: State> Client<S> {
         let mut req = self
             .client()
             .request(Method::GET, format!("{}prices-history", self.host()))
-            .query(&[("market", request.market.as_str())]);
+            .query(&[("market", request.market.to_string())]);
 
         match request.time_range {
             TimeRange::Interval { interval } => {
