@@ -26,9 +26,6 @@ use crate::{Result, error::Error};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// Broadcast channel capacity for incoming messages.
-const BROADCAST_CAPACITY: usize = 1024;
-
 /// Connection state tracking.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +113,7 @@ where
     /// handles reconnection according to the config's `ReconnectConfig`.
     pub fn new(endpoint: String, config: Config, parser: P) -> Result<Self> {
         let (sender_tx, sender_rx) = mpsc::unbounded_channel();
-        let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let (broadcast_tx, _) = broadcast::channel(config.broadcast_capacity);
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
 
         // Spawn connection task

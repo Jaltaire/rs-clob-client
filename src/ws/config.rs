@@ -12,6 +12,7 @@ const DEFAULT_HEARTBEAT_TIMEOUT_DURATION: Duration = Duration::from_secs(15);
 const DEFAULT_INITIAL_BACKOFF_DURATION: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_BACKOFF_DURATION: Duration = Duration::from_secs(60);
 const DEFAULT_BACKOFF_MULTIPLIER: f64 = 2.0;
+const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
 
 /// Configuration for WebSocket client behavior.
 #[non_exhaustive]
@@ -23,6 +24,11 @@ pub struct Config {
     pub heartbeat_timeout: Duration,
     /// Reconnection strategy configuration
     pub reconnect: ReconnectConfig,
+    /// Capacity of the internal broadcast channel for incoming messages.
+    /// If subscribers cannot keep up with the message rate, older messages
+    /// will be dropped. Increase this value for high-throughput recording
+    /// scenarios where message loss is unacceptable.
+    pub broadcast_capacity: usize,
 }
 
 impl Default for Config {
@@ -31,6 +37,7 @@ impl Default for Config {
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL_DURATION,
             heartbeat_timeout: DEFAULT_HEARTBEAT_TIMEOUT_DURATION,
             reconnect: ReconnectConfig::default(),
+            broadcast_capacity: DEFAULT_BROADCAST_CAPACITY,
         }
     }
 }
