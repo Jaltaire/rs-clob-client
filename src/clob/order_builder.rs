@@ -251,10 +251,15 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         }
 
         // When buying `YES` tokens, the user will "make" `size` * `price` USDC and "take"
-        // `size` `YES` tokens, and vice versa for sells. We have to truncate the notional values
-        // to the combined precision of the tick size _and_ the lot size. This is to ensure that
-        // this order will "snap" to the precision of resting orders on the book. The returned
-        // values are quantized to `USDC_DECIMALS`.
+        // `size` `YES` tokens, and vice versa for sells.
+        //
+        // Backend precision requirements:
+        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS)
+        // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
+        //
+        // Context mapping for limit orders:
+        // - BUY:  Maker = USDC (what user gives), Taker = shares (what user receives)
+        // - SELL: Maker = shares (what user gives), Taker = USDC (what user receives)
         //
         // e.g. User submits a limit order to buy 100 `YES` tokens at $0.34.
         // This means they will take/receive 100 `YES` tokens, make/give up 34 USDC. This means that
@@ -262,10 +267,10 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         let (taker_amount, maker_amount) = match side {
             Side::Buy => (
                 size,
-                (size * price).trunc_with_scale(decimals + LOT_SIZE_SCALE),
+                (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS),
             ),
             Side::Sell => (
-                (size * price).trunc_with_scale(decimals + LOT_SIZE_SCALE),
+                (size * price).trunc_with_scale(TAKER_AMOUNT_DECIMALS),
                 size,
             ),
             side => return Err(Error::validation(format!("Invalid side: {side}"))),
