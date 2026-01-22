@@ -23,9 +23,9 @@ pub(crate) const USDC_DECIMALS: u32 = 6;
 /// Maximum number of decimal places for `size`
 pub(crate) const LOT_SIZE_SCALE: u32 = 2;
 
-/// Maximum number of decimal places for maker amounts in market orders.
-/// Backend constraint: "maker amount supports a max accuracy of 2 decimals"
-pub(crate) const MAKER_AMOUNT_DECIMALS: u32 = 2;
+/// Maximum number of decimal places for maker amounts in orders.
+/// Backend accepts up to 4 decimal places for maker amounts.
+pub(crate) const MAKER_AMOUNT_DECIMALS: u32 = 4;
 
 /// Maximum number of decimal places for taker amounts in market orders.
 /// Backend constraint: "taker amount a max of 4 decimals"
@@ -43,7 +43,7 @@ pub struct Market;
 
 /// Rounding strategy for market order amount calculations.
 ///
-/// The backend requires maker amounts to have at most 2 decimal places and taker amounts
+/// The backend requires maker amounts to have at most 4 decimal places and taker amounts
 /// to have at most 4 decimal places. This enum controls how amounts are rounded to meet
 /// these precision constraints.
 ///
@@ -254,7 +254,7 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         // `size` `YES` tokens, and vice versa for sells.
         //
         // Backend precision requirements:
-        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS)
+        // - Maker amounts: max 4 decimal places (MAKER_AMOUNT_DECIMALS)
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping for limit orders:
@@ -324,7 +324,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
     /// Sets the rounding strategy for market order amount calculations.
     ///
     /// The backend requires:
-    /// - Maker amounts: max 2 decimal places
+    /// - Maker amounts: max 4 decimal places
     /// - Taker amounts: max 4 decimal places
     ///
     /// This strategy controls how amounts are rounded to meet these constraints.
@@ -463,7 +463,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         // Calculate maker and taker amounts with context-aware rounding.
         //
         // Backend precision requirements:
-        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS)
+        // - Maker amounts: max 4 decimal places (MAKER_AMOUNT_DECIMALS)
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping:
@@ -483,7 +483,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         let (taker_amount, maker_amount) = match (side, amount.0) {
             // Spend USDC to buy shares
-            // Maker = USDC (2 decimals), Taker = shares (4 decimals)
+            // Maker = USDC (4 decimals), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Usdc(_)) => {
                 let shares = apply_rounding(raw_amount / price, TAKER_AMOUNT_DECIMALS, strategy);
                 let usdc = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS, strategy);
@@ -491,7 +491,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
             }
 
             // Buy N shares: use cutoff `price` derived from ask depth
-            // Maker = USDC (2 decimals), Taker = shares (4 decimals)
+            // Maker = USDC (4 decimals), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Shares(_)) => {
                 let usdc = apply_rounding(raw_amount * price, MAKER_AMOUNT_DECIMALS, strategy);
                 let shares = apply_rounding(raw_amount, TAKER_AMOUNT_DECIMALS, strategy);
@@ -499,7 +499,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
             }
 
             // Sell N shares for USDC
-            // Maker = shares (2 decimals), Taker = USDC (4 decimals)
+            // Maker = shares (4 decimals), Taker = USDC (4 decimals)
             (Side::Sell, AmountInner::Shares(_)) => {
                 let usdc = apply_rounding(raw_amount * price, TAKER_AMOUNT_DECIMALS, strategy);
                 let shares = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS, strategy);
@@ -729,8 +729,8 @@ mod tests {
     }
 
     #[test]
-    fn maker_amount_decimals_is_two() {
-        assert_eq!(MAKER_AMOUNT_DECIMALS, 2);
+    fn maker_amount_decimals_is_four() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS, 4);
     }
 
     #[test]
