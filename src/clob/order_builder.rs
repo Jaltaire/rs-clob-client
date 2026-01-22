@@ -23,9 +23,13 @@ pub(crate) const USDC_DECIMALS: u32 = 6;
 /// Maximum number of decimal places for `size`
 pub(crate) const LOT_SIZE_SCALE: u32 = 2;
 
-/// Maximum number of decimal places for maker amounts in orders.
-/// Backend accepts up to 4 decimal places for maker amounts.
-pub(crate) const MAKER_AMOUNT_DECIMALS: u32 = 4;
+/// Maximum number of decimal places for maker amounts in GTC/GTD orders.
+/// Backend accepts up to 4 decimal places for maker amounts in resting orders.
+pub(crate) const MAKER_AMOUNT_DECIMALS_RESTING: u32 = 4;
+
+/// Maximum number of decimal places for maker amounts in FOK/FAK orders.
+/// Backend limits maker amounts to 2 decimal places for immediate-or-cancel orders.
+pub(crate) const MAKER_AMOUNT_DECIMALS_IMMEDIATE: u32 = 2;
 
 /// Maximum number of decimal places for taker amounts in market orders.
 /// Backend constraint: "taker amount a max of 4 decimals"
@@ -253,8 +257,9 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         // When buying `YES` tokens, the user will "make" `size` * `price` USDC and "take"
         // `size` `YES` tokens, and vice versa for sells.
         //
-        // Backend precision requirements:
-        // - Maker amounts: max 4 decimal places (MAKER_AMOUNT_DECIMALS)
+        // Backend precision requirements vary by order type:
+        // - GTC/GTD (resting): Maker amounts max 4 decimal places
+        // - FOK/FAK (immediate): Maker amounts max 2 decimal places
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping for limit orders:
@@ -264,10 +269,14 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         // e.g. User submits a limit order to buy 100 `YES` tokens at $0.34.
         // This means they will take/receive 100 `YES` tokens, make/give up 34 USDC. This means that
         // the `taker_amount` is `100000000` and the `maker_amount` of `34000000`.
+        let maker_decimals = match order_type {
+            OrderType::GTC | OrderType::GTD => MAKER_AMOUNT_DECIMALS_RESTING,
+            OrderType::FOK | OrderType::FAK | OrderType::Unknown(_) => MAKER_AMOUNT_DECIMALS_IMMEDIATE,
+        };
         let (taker_amount, maker_amount) = match side {
             Side::Buy => (
                 size,
-                (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS),
+                (size * price).trunc_with_scale(maker_decimals),
             ),
             Side::Sell => (
                 (size * price).trunc_with_scale(TAKER_AMOUNT_DECIMALS),
@@ -462,8 +471,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         // Calculate maker and taker amounts with context-aware rounding.
         //
-        // Backend precision requirements:
-        // - Maker amounts: max 4 decimal places (MAKER_AMOUNT_DECIMALS)
+        // Backend precision requirements for market orders (always immediate/FOK):
+        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS_IMMEDIATE)
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping:
@@ -483,26 +492,26 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         let (taker_amount, maker_amount) = match (side, amount.0) {
             // Spend USDC to buy shares
-            // Maker = USDC (4 decimals), Taker = shares (4 decimals)
+            // Maker = USDC (2 decimals for immediate orders), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Usdc(_)) => {
                 let shares = apply_rounding(raw_amount / price, TAKER_AMOUNT_DECIMALS, strategy);
-                let usdc = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS, strategy);
+                let usdc = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
                 (shares, usdc)
             }
 
             // Buy N shares: use cutoff `price` derived from ask depth
-            // Maker = USDC (4 decimals), Taker = shares (4 decimals)
+            // Maker = USDC (2 decimals for immediate orders), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Shares(_)) => {
-                let usdc = apply_rounding(raw_amount * price, MAKER_AMOUNT_DECIMALS, strategy);
+                let usdc = apply_rounding(raw_amount * price, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
                 let shares = apply_rounding(raw_amount, TAKER_AMOUNT_DECIMALS, strategy);
                 (shares, usdc)
             }
 
             // Sell N shares for USDC
-            // Maker = shares (4 decimals), Taker = USDC (4 decimals)
+            // Maker = shares (2 decimals for immediate orders), Taker = USDC (4 decimals)
             (Side::Sell, AmountInner::Shares(_)) => {
                 let usdc = apply_rounding(raw_amount * price, TAKER_AMOUNT_DECIMALS, strategy);
-                let shares = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS, strategy);
+                let shares = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
                 (usdc, shares)
             }
 
@@ -729,8 +738,13 @@ mod tests {
     }
 
     #[test]
-    fn maker_amount_decimals_is_four() {
-        assert_eq!(MAKER_AMOUNT_DECIMALS, 4);
+    fn maker_amount_decimals_resting_is_four() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS_RESTING, 4);
+    }
+
+    #[test]
+    fn maker_amount_decimals_immediate_is_two() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS_IMMEDIATE, 2);
     }
 
     #[test]
