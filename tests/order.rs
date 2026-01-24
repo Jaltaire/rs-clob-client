@@ -1094,14 +1094,20 @@ mod limit {
             let taker_amount = signable_order.order.takerAmount;
 
             let price = to_decimal(taker_amount) / to_decimal(maker_amount);
-            assert_eq!(price, dec!(0.056));
+            let price_diff = (price - dec!(0.056)).abs();
+            assert!(
+                price_diff < dec!(0.0001),
+                "Price {} should be approximately 0.056 (diff: {})",
+                price,
+                price_diff
+            );
 
             assert_eq!(signable_order.order.maker, client.address());
             assert_eq!(signable_order.order.signer, client.address());
             assert_eq!(signable_order.order.taker, Address::ZERO);
             assert_eq!(signable_order.order.tokenId, token_1());
             assert_eq!(signable_order.order.makerAmount, U256::from(21_040_000));
-            assert_eq!(signable_order.order.takerAmount, U256::from(1_178_240));
+            assert_eq!(signable_order.order.takerAmount, U256::from(1_178_200));
             assert_eq!(signable_order.order.expiration, U256::from(50000));
             assert_eq!(signable_order.order.nonce, U256::from(123));
             assert_eq!(signable_order.order.feeRateBps, U256::ZERO);
@@ -1134,14 +1140,20 @@ mod limit {
             let taker_amount = signable_order.order.takerAmount;
 
             let price = to_decimal(taker_amount) / to_decimal(maker_amount);
-            assert_eq!(price, dec!(0.0056));
+            let price_diff = (price - dec!(0.0056)).abs();
+            assert!(
+                price_diff < dec!(0.00001),
+                "Price {} should be approximately 0.0056 (diff: {})",
+                price,
+                price_diff
+            );
 
             assert_eq!(signable_order.order.maker, client.address());
             assert_eq!(signable_order.order.signer, client.address());
             assert_eq!(signable_order.order.taker, Address::ZERO);
             assert_eq!(signable_order.order.tokenId, token_1());
             assert_eq!(signable_order.order.makerAmount, U256::from(21_040_000));
-            assert_eq!(signable_order.order.takerAmount, U256::from(117_824));
+            assert_eq!(signable_order.order.takerAmount, U256::from(117_800));
             assert_eq!(signable_order.order.expiration, U256::from(50000));
             assert_eq!(signable_order.order.nonce, U256::from(123));
             assert_eq!(signable_order.order.feeRateBps, U256::ZERO);

@@ -24,12 +24,14 @@ pub(crate) const USDC_DECIMALS: u32 = 6;
 pub(crate) const LOT_SIZE_SCALE: u32 = 2;
 
 /// Maximum number of decimal places for maker amounts in GTC/GTD orders.
-/// Backend accepts up to 4 decimal places for maker amounts in resting orders.
-pub(crate) const MAKER_AMOUNT_DECIMALS_RESTING: u32 = 4;
+/// Backend accepts maker amounts with USDC precision (6 decimal places).
+/// The backend validates that maker_amount = price * size with full precision.
+pub(crate) const MAKER_AMOUNT_DECIMALS_RESTING: u32 = 6;
 
 /// Maximum number of decimal places for maker amounts in FOK/FAK orders.
-/// Backend limits maker amounts to 2 decimal places for immediate-or-cancel orders.
-pub(crate) const MAKER_AMOUNT_DECIMALS_IMMEDIATE: u32 = 2;
+/// Backend accepts maker amounts with USDC precision (6 decimal places).
+/// The backend validates that maker_amount = price * size with full precision.
+pub(crate) const MAKER_AMOUNT_DECIMALS_IMMEDIATE: u32 = 6;
 
 /// Maximum number of decimal places for taker amounts in market orders.
 /// Backend constraint: "taker amount a max of 4 decimals"
@@ -257,9 +259,8 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         // When buying `YES` tokens, the user will "make" `size` * `price` USDC and "take"
         // `size` `YES` tokens, and vice versa for sells.
         //
-        // Backend precision requirements vary by order type:
-        // - GTC/GTD (resting): Maker amounts max 4 decimal places
-        // - FOK/FAK (immediate): Maker amounts max 2 decimal places
+        // Backend precision requirements:
+        // - Maker amounts: USDC precision (6 decimal places) - validated against price * size
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping for limit orders:
@@ -333,7 +334,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
     /// Sets the rounding strategy for market order amount calculations.
     ///
     /// The backend requires:
-    /// - Maker amounts: max 4 decimal places
+    /// - Maker amounts: USDC precision (6 decimal places)
     /// - Taker amounts: max 4 decimal places
     ///
     /// This strategy controls how amounts are rounded to meet these constraints.
@@ -471,8 +472,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         // Calculate maker and taker amounts with context-aware rounding.
         //
-        // Backend precision requirements for market orders (always immediate/FOK):
-        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS_IMMEDIATE)
+        // Backend precision requirements for market orders:
+        // - Maker amounts: USDC precision (6 decimal places)
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping:
@@ -492,7 +493,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         let (taker_amount, maker_amount) = match (side, amount.0) {
             // Spend USDC to buy shares
-            // Maker = USDC (2 decimals for immediate orders), Taker = shares (4 decimals)
+            // Maker = USDC (6 decimals), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Usdc(_)) => {
                 let shares = apply_rounding(raw_amount / price, TAKER_AMOUNT_DECIMALS, strategy);
                 let usdc = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
@@ -500,7 +501,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
             }
 
             // Buy N shares: use cutoff `price` derived from ask depth
-            // Maker = USDC (2 decimals for immediate orders), Taker = shares (4 decimals)
+            // Maker = USDC (6 decimals), Taker = shares (4 decimals)
             (Side::Buy, AmountInner::Shares(_)) => {
                 let usdc = apply_rounding(raw_amount * price, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
                 let shares = apply_rounding(raw_amount, TAKER_AMOUNT_DECIMALS, strategy);
@@ -508,7 +509,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
             }
 
             // Sell N shares for USDC
-            // Maker = shares (2 decimals for immediate orders), Taker = USDC (4 decimals)
+            // Maker = shares (6 decimals), Taker = USDC (4 decimals)
             (Side::Sell, AmountInner::Shares(_)) => {
                 let usdc = apply_rounding(raw_amount * price, TAKER_AMOUNT_DECIMALS, strategy);
                 let shares = apply_rounding(raw_amount, MAKER_AMOUNT_DECIMALS_IMMEDIATE, strategy);
@@ -738,17 +739,114 @@ mod tests {
     }
 
     #[test]
-    fn maker_amount_decimals_resting_is_four() {
-        assert_eq!(MAKER_AMOUNT_DECIMALS_RESTING, 4);
+    fn maker_amount_decimals_resting_is_six() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS_RESTING, 6);
     }
 
     #[test]
-    fn maker_amount_decimals_immediate_is_two() {
-        assert_eq!(MAKER_AMOUNT_DECIMALS_IMMEDIATE, 2);
+    fn maker_amount_decimals_immediate_is_six() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS_IMMEDIATE, 6);
     }
 
     #[test]
     fn taker_amount_decimals_is_four() {
         assert_eq!(TAKER_AMOUNT_DECIMALS, 4);
+    }
+
+    #[test]
+    fn maker_amount_preserves_five_decimal_precision() {
+        let price = dec!(0.009);
+        let size = dec!(10.85);
+        let expected_maker_amount = dec!(0.09765);
+
+        let calculated = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+
+        assert_eq!(
+            calculated, expected_maker_amount,
+            "Maker amount calculation should preserve 5 decimal places for price={} size={}",
+            price, size
+        );
+    }
+
+    #[test]
+    fn maker_amount_edge_cases_preserve_precision() {
+        let test_cases = vec![
+            (dec!(0.009), dec!(10.85), dec!(0.09765)),
+            (dec!(0.001), dec!(99.99), dec!(0.09999)),
+            (dec!(0.01), dec!(10.001), dec!(0.10001)),
+            (dec!(0.005), dec!(20.02), dec!(0.1001)),
+            (dec!(0.003), dec!(33.333), dec!(0.099999)),
+            (dec!(0.99), dec!(100.00), dec!(99.00)),
+            (dec!(0.001), dec!(1.00), dec!(0.001)),
+            (dec!(0.999), dec!(0.01), dec!(0.00999)),
+        ];
+
+        for (price, size, expected) in test_cases {
+            let calculated = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+            assert_eq!(
+                calculated, expected,
+                "price={} size={} expected={} got={}",
+                price, size, expected, calculated
+            );
+        }
+    }
+
+    #[test]
+    fn to_fixed_u128_preserves_precision_for_five_decimals() {
+        let maker_amount = dec!(0.09765);
+        let fixed = to_fixed_u128(maker_amount);
+        assert_eq!(fixed, 97650, "0.09765 USDC should convert to 97650 microdollars");
+    }
+
+    #[test]
+    fn to_fixed_u128_edge_cases() {
+        assert_eq!(to_fixed_u128(dec!(0.09765)), 97650);
+        assert_eq!(to_fixed_u128(dec!(0.09999)), 99990);
+        assert_eq!(to_fixed_u128(dec!(0.10001)), 100010);
+        assert_eq!(to_fixed_u128(dec!(0.099999)), 99999);
+        assert_eq!(to_fixed_u128(dec!(0.000001)), 1);
+        assert_eq!(to_fixed_u128(dec!(0.001)), 1000);
+        assert_eq!(to_fixed_u128(dec!(0.00999)), 9990);
+    }
+
+    #[test]
+    fn limit_order_buy_maker_amount_calculation() {
+        let price = dec!(0.009);
+        let size = dec!(10.85);
+
+        let maker_amount = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+        let maker_amount_fixed = to_fixed_u128(maker_amount);
+
+        assert_eq!(maker_amount, dec!(0.09765));
+        assert_eq!(maker_amount_fixed, 97650);
+    }
+
+    #[test]
+    fn limit_order_buy_maker_amount_with_various_prices() {
+        let test_cases = vec![
+            (dec!(0.001), dec!(100.00), dec!(0.1), 100_000),
+            (dec!(0.002), dec!(50.00), dec!(0.1), 100_000),
+            (dec!(0.005), dec!(20.00), dec!(0.1), 100_000),
+            (dec!(0.009), dec!(10.85), dec!(0.09765), 97_650),
+            (dec!(0.01), dec!(10.00), dec!(0.1), 100_000),
+            (dec!(0.99), dec!(10.10), dec!(9.999), 9_999_000),
+            (dec!(0.001), dec!(0.01), dec!(0.00001), 10),
+        ];
+
+        for (price, size, expected_maker, expected_fixed) in test_cases {
+            let maker_amount = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+            let maker_fixed = to_fixed_u128(maker_amount);
+
+            assert_eq!(
+                maker_amount, expected_maker,
+                "price={} size={} expected_maker={} got={}",
+                price, size, expected_maker, maker_amount
+            );
+            assert_eq!(
+                maker_fixed, expected_fixed,
+                "price={} size={} expected_fixed={} got={}",
+                price, size, expected_fixed, maker_fixed
+            );
+        }
     }
 }
