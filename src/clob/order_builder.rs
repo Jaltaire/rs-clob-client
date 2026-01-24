@@ -24,14 +24,14 @@ pub(crate) const USDC_DECIMALS: u32 = 6;
 pub(crate) const LOT_SIZE_SCALE: u32 = 2;
 
 /// Maximum number of decimal places for maker amounts in GTC/GTD orders.
-/// Backend accepts maker amounts with USDC precision (6 decimal places).
-/// The backend validates that maker_amount = price * size with full precision.
+/// Backend validates that maker_amount = price * size with full precision.
+/// Using USDC precision (6 decimal places) to preserve exact calculation results.
 pub(crate) const MAKER_AMOUNT_DECIMALS_RESTING: u32 = 6;
 
 /// Maximum number of decimal places for maker amounts in FOK/FAK orders.
-/// Backend accepts maker amounts with USDC precision (6 decimal places).
-/// The backend validates that maker_amount = price * size with full precision.
-pub(crate) const MAKER_AMOUNT_DECIMALS_IMMEDIATE: u32 = 6;
+/// Backend error: "market buy orders maker amount supports a max accuracy of 2 decimals"
+/// Immediate orders have stricter precision limits than resting orders.
+pub(crate) const MAKER_AMOUNT_DECIMALS_IMMEDIATE: u32 = 2;
 
 /// Maximum number of decimal places for taker amounts in market orders.
 /// Backend constraint: "taker amount a max of 4 decimals"
@@ -259,8 +259,11 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         // When buying `YES` tokens, the user will "make" `size` * `price` USDC and "take"
         // `size` `YES` tokens, and vice versa for sells.
         //
-        // Backend precision requirements:
-        // - Maker amounts: USDC precision (6 decimal places) - validated against price * size
+        // Backend precision requirements vary by order type:
+        // - GTC/GTD (resting): Maker amounts need full precision (up to 6 decimals)
+        //   Backend validates maker_amount = price * size exactly
+        // - FOK/FAK (immediate): Maker amounts max 2 decimal places
+        //   Backend error: "market buy orders maker amount supports a max accuracy of 2 decimals"
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping for limit orders:
@@ -333,8 +336,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
     /// Sets the rounding strategy for market order amount calculations.
     ///
-    /// The backend requires:
-    /// - Maker amounts: USDC precision (6 decimal places)
+    /// The backend requires for market orders (FOK/FAK):
+    /// - Maker amounts: max 2 decimal places
     /// - Taker amounts: max 4 decimal places
     ///
     /// This strategy controls how amounts are rounded to meet these constraints.
@@ -472,8 +475,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         // Calculate maker and taker amounts with context-aware rounding.
         //
-        // Backend precision requirements for market orders:
-        // - Maker amounts: USDC precision (6 decimal places)
+        // Backend precision requirements for market orders (FOK/FAK):
+        // - Maker amounts: max 2 decimal places (MAKER_AMOUNT_DECIMALS_IMMEDIATE)
         // - Taker amounts: max 4 decimal places (TAKER_AMOUNT_DECIMALS)
         //
         // Context mapping:
@@ -744,8 +747,8 @@ mod tests {
     }
 
     #[test]
-    fn maker_amount_decimals_immediate_is_six() {
-        assert_eq!(MAKER_AMOUNT_DECIMALS_IMMEDIATE, 6);
+    fn maker_amount_decimals_immediate_is_two() {
+        assert_eq!(MAKER_AMOUNT_DECIMALS_IMMEDIATE, 2);
     }
 
     #[test]
@@ -848,5 +851,149 @@ mod tests {
                 price, size, expected_fixed, maker_fixed
             );
         }
+    }
+
+    #[test]
+    fn gtc_order_uses_resting_precision() {
+        let order_type = OrderType::GTC;
+        let maker_decimals = match order_type {
+            OrderType::GTC | OrderType::GTD => MAKER_AMOUNT_DECIMALS_RESTING,
+            OrderType::FOK | OrderType::FAK | OrderType::Unknown(_) => MAKER_AMOUNT_DECIMALS_IMMEDIATE,
+        };
+        assert_eq!(maker_decimals, 6, "GTC orders should use 6 decimal precision");
+    }
+
+    #[test]
+    fn gtd_order_uses_resting_precision() {
+        let order_type = OrderType::GTD;
+        let maker_decimals = match order_type {
+            OrderType::GTC | OrderType::GTD => MAKER_AMOUNT_DECIMALS_RESTING,
+            OrderType::FOK | OrderType::FAK | OrderType::Unknown(_) => MAKER_AMOUNT_DECIMALS_IMMEDIATE,
+        };
+        assert_eq!(maker_decimals, 6, "GTD orders should use 6 decimal precision");
+    }
+
+    #[test]
+    fn fok_order_uses_immediate_precision() {
+        let order_type = OrderType::FOK;
+        let maker_decimals = match order_type {
+            OrderType::GTC | OrderType::GTD => MAKER_AMOUNT_DECIMALS_RESTING,
+            OrderType::FOK | OrderType::FAK | OrderType::Unknown(_) => MAKER_AMOUNT_DECIMALS_IMMEDIATE,
+        };
+        assert_eq!(maker_decimals, 2, "FOK orders should use 2 decimal precision");
+    }
+
+    #[test]
+    fn fak_order_uses_immediate_precision() {
+        let order_type = OrderType::FAK;
+        let maker_decimals = match order_type {
+            OrderType::GTC | OrderType::GTD => MAKER_AMOUNT_DECIMALS_RESTING,
+            OrderType::FOK | OrderType::FAK | OrderType::Unknown(_) => MAKER_AMOUNT_DECIMALS_IMMEDIATE,
+        };
+        assert_eq!(maker_decimals, 2, "FAK orders should use 2 decimal precision");
+    }
+
+    #[test]
+    fn gtc_preserves_five_decimal_maker_amount() {
+        let price = dec!(0.009);
+        let size = dec!(10.85);
+        let maker_amount = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+        assert_eq!(maker_amount, dec!(0.09765), "GTC maker amount should preserve 5 decimal precision");
+    }
+
+    #[test]
+    fn fak_truncates_maker_amount_to_two_decimals() {
+        let price = dec!(0.009);
+        let size = dec!(10.85);
+        let maker_amount = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+        assert_eq!(maker_amount, dec!(0.09), "FAK maker amount should truncate to 2 decimals");
+    }
+
+    #[test]
+    fn fok_truncates_maker_amount_to_two_decimals() {
+        let price = dec!(0.55);
+        let size = dec!(100.00);
+        let maker_amount = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+        assert_eq!(maker_amount, dec!(55.00), "FOK maker amount should truncate to 2 decimals");
+
+        let price2 = dec!(0.333);
+        let size2 = dec!(10.00);
+        let maker_amount2 = (size2 * price2).trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+        assert_eq!(maker_amount2, dec!(3.33), "FOK maker amount should truncate 3.33 correctly");
+    }
+
+    #[test]
+    fn order_type_precision_matrix() {
+        let price = dec!(0.12345);
+        let size = dec!(10.00);
+        let raw_maker = size * price;
+        assert_eq!(raw_maker, dec!(1.2345), "Sanity check: 10 * 0.12345 = 1.2345");
+
+        let resting_truncated = raw_maker.trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+        assert_eq!(resting_truncated, dec!(1.2345), "Resting (6 decimal) should preserve 1.2345");
+
+        let immediate_truncated = raw_maker.trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+        assert_eq!(immediate_truncated, dec!(1.23), "Immediate (2 decimal) should truncate to 1.23");
+    }
+
+    #[test]
+    fn real_world_fak_entry_order_scenario() {
+        let price = dec!(0.50);
+        let size = dec!(100.00);
+        let raw_maker = size * price;
+
+        let truncated = raw_maker.trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+        assert_eq!(truncated, dec!(50.00), "FAK entry order: $50.00 maker amount");
+
+        let fixed = to_fixed_u128(truncated);
+        assert_eq!(fixed, 50_000_000, "FAK entry order: 50,000,000 microdollars");
+    }
+
+    #[test]
+    fn real_world_gtc_hedge_order_scenario() {
+        let price = dec!(0.009);
+        let size = dec!(10.85);
+        let raw_maker = size * price;
+
+        let truncated = raw_maker.trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+        assert_eq!(truncated, dec!(0.09765), "GTC hedge order: $0.09765 maker amount");
+
+        let fixed = to_fixed_u128(truncated);
+        assert_eq!(fixed, 97_650, "GTC hedge order: 97,650 microdollars");
+    }
+
+    #[test]
+    fn taker_amount_precision_is_four_decimals() {
+        let size = dec!(10.85);
+        let taker_amount = size.trunc_with_scale(TAKER_AMOUNT_DECIMALS);
+        assert_eq!(taker_amount, dec!(10.85), "Taker amount should preserve 2 decimal size");
+
+        let fractional_size = dec!(10.12345);
+        let taker_amount2 = fractional_size.trunc_with_scale(TAKER_AMOUNT_DECIMALS);
+        assert_eq!(taker_amount2, dec!(10.1234), "Taker amount should truncate to 4 decimals");
+    }
+
+    #[test]
+    fn sell_order_maker_is_size_taker_is_usdc() {
+        let price = dec!(0.50);
+        let size = dec!(100.00);
+        let taker_amount = (size * price).trunc_with_scale(TAKER_AMOUNT_DECIMALS);
+        let maker_amount = size;
+
+        assert_eq!(taker_amount, dec!(50.00), "Sell taker (USDC) = size * price");
+        assert_eq!(maker_amount, dec!(100.00), "Sell maker (shares) = size");
+    }
+
+    #[test]
+    fn buy_order_maker_is_usdc_taker_is_size() {
+        let price = dec!(0.50);
+        let size = dec!(100.00);
+        let taker_amount = size;
+        let maker_amount_gtc = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_RESTING);
+        let maker_amount_fak = (size * price).trunc_with_scale(MAKER_AMOUNT_DECIMALS_IMMEDIATE);
+
+        assert_eq!(taker_amount, dec!(100.00), "Buy taker (shares) = size");
+        assert_eq!(maker_amount_gtc, dec!(50.00), "Buy maker GTC (USDC) = size * price with 6 decimals");
+        assert_eq!(maker_amount_fak, dec!(50.00), "Buy maker FAK (USDC) = size * price with 2 decimals");
     }
 }
