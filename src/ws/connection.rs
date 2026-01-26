@@ -168,15 +168,8 @@ where
 
             _ = state_tx.send(ConnectionState::Connecting);
 
-            // Attempt connection
-            #[cfg(not(feature = "tracing"))]
-            eprintln!("[WS CONNECT] Attempting connection to: {}", &endpoint);
-
             match connect_async(&endpoint).await {
                 Ok((ws_stream, _)) => {
-                    #[cfg(not(feature = "tracing"))]
-                    eprintln!("[WS CONNECTED] Successfully connected to: {}", &endpoint);
-
                     attempt = 0;
                     backoff.reset();
                     _ = state_tx.send(ConnectionState::Connected {
@@ -196,16 +189,13 @@ where
                     {
                         #[cfg(feature = "tracing")]
                         tracing::error!("Error handling connection: {e:?}");
-                        #[cfg(not(feature = "tracing"))]
-                        eprintln!("[WS DISCONNECT] Connection to {} ended: {:?}", &endpoint, e);
                     }
                 }
                 Err(e) => {
                     let error = Error::with_source(Kind::WebSocket, WsError::Connection(e));
                     #[cfg(feature = "tracing")]
                     tracing::warn!("Unable to connect: {error:?}");
-                    #[cfg(not(feature = "tracing"))]
-                    eprintln!("[WS CONNECT ERROR] Failed to connect to {}: {:?}", &endpoint, error);
+                    drop(error);
                     attempt = attempt.saturating_add(1);
                 }
             }
@@ -258,21 +248,6 @@ where
                             #[cfg(feature = "tracing")]
                             tracing::trace!(%text, "Received WebSocket text message");
 
-                            #[cfg(not(feature = "tracing"))]
-                            {
-                                if text.contains("\"event_type\":\"trade\"") {
-                                    eprintln!("[WS TRADE EVENT] {}", &text[..text.len().min(800)]);
-                                } else if text.contains("\"event_type\":\"order\"") {
-                                    eprintln!("[WS ORDER EVENT] {}", &text[..text.len().min(800)]);
-                                } else if !text.contains("\"event_type\":\"book\"")
-                                    && !text.contains("\"event_type\":\"price_change\"")
-                                    && !text.contains("\"event_type\":\"last_trade_price\"")
-                                {
-                                    eprintln!("[WS MSG] {}", &text[..text.len().min(500)]);
-                                }
-                            }
-
-                            // Parse messages using the provided parser
                             match parser.parse(text.as_bytes()) {
                                 Ok(messages) => {
                                     for message in messages {
@@ -284,20 +259,11 @@ where
                                 Err(e) => {
                                     #[cfg(feature = "tracing")]
                                     tracing::warn!(%text, error = %e, "Failed to parse WebSocket message");
-                                    #[cfg(not(feature = "tracing"))]
-                                    eprintln!("[WS PARSE ERROR] text={} error={}", text, e);
+                                    drop(e);
                                 }
                             }
                         }
-                        Ok(Message::Close(close_frame)) => {
-                            #[cfg(not(feature = "tracing"))]
-                            {
-                                if let Some(cf) = &close_frame {
-                                    eprintln!("[WS CLOSE FRAME] code={} reason={}", cf.code, cf.reason);
-                                } else {
-                                    eprintln!("[WS CLOSE FRAME] No close frame details");
-                                }
-                            }
+                        Ok(Message::Close(_)) => {
                             heartbeat_handle.abort();
                             return Err(Error::with_source(
                                 Kind::WebSocket,
@@ -305,32 +271,18 @@ where
                             ))
                         }
                         Err(e) => {
-                            #[cfg(not(feature = "tracing"))]
-                            eprintln!("[WS ERROR] Error receiving message: {:?}", e);
                             heartbeat_handle.abort();
                             return Err(Error::with_source(
                                 Kind::WebSocket,
                                 WsError::Connection(e),
                             ));
                         }
-                        other => {
-                            #[cfg(not(feature = "tracing"))]
-                            eprintln!("[WS OTHER MSG TYPE] {:?}", other);
-                        }
+                        _ => {}
                     }
                 }
 
                 // Handle outgoing messages from subscriptions
                 Some(text) = sender_rx.recv() => {
-                    #[cfg(not(feature = "tracing"))]
-                    if text.contains("\"type\"") && text.contains("\"auth\"") {
-                        if let Some(markets_start) = text.find("\"markets\"") {
-                            let markets_preview = &text[markets_start..text.len().min(markets_start + 200)];
-                            eprintln!("[WS OUTGOING USER] type=user, markets preview: {}", markets_preview);
-                        } else {
-                            eprintln!("[WS OUTGOING USER] WARNING: no 'markets' field found in subscription request!");
-                        }
-                    }
                     if write.send(Message::Text(text.into())).await.is_err() {
                         break;
                     }
